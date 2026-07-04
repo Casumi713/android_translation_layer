@@ -66,12 +66,15 @@ jobs:
             libvulkan-dev \
             libwayland-dev \
             libwebkitgtk-6.0-dev \
+            liblz4-dev \
+            liblzma-dev \
             meson \
             ninja-build \
             openjdk-21-jdk-headless \
             pkg-config \
             librsvg2-bin \
-            wget
+            wget \
+            zip
 
       - name: Set up AOSP build system for art_standalone
         run: |
@@ -81,19 +84,23 @@ jobs:
 
           if [ ! -d "$BUILD_DIR/core" ]; then
             rm -rf "$BUILD_DIR"
-            git clone --depth 1 \
+            # android-6.0.1_r46 is the old Make-only build system (pre-Soong)
+            git clone --depth 1 --branch android-6.0.1_r46 \
               https://github.com/aosp-mirror/platform_build.git \
               "$BUILD_DIR"
           fi
 
-          # Patch main.mk to skip Java version check — art_standalone
-          # works fine with modern JDK (the old check only accepts 1.7/1.8)
+          # Patch main.mk to support modern JDK and environments
           MAIN_MK="$BUILD_DIR/core/main.mk"
-          # Remove the Java version check block (lines between "Check for correct java" and the next include)
+
+          # Fix 1: Bypass the KATI/Soong check (some clones default to modern Soong)
+          sed -i '/^ifndef KATI/,/^endif/{s/.*/KATI := yes/;}' "$MAIN_MK" 2>/dev/null || true
+
+          # Fix 2: Bypass Java version check — art_standalone works fine with
+          # modern JDK (the old AOSP check only accepts 1.7/1.8)
           sed -i \
             '/^java_version_str/,/^include.*versions_check.mk/d' \
             "$MAIN_MK" 2>/dev/null || true
-          # Also set EXPERIMENTAL_USE_JAVA8 to use the less-strict code path
           echo "EXPERIMENTAL_USE_JAVA8 := true" >> "$MAIN_MK"
 
       - name: Configure
