@@ -70,7 +70,6 @@ jobs:
             liblzma-dev \
             meson \
             ninja-build \
-            openjdk-11-jdk-headless \
             openjdk-21-jdk-headless \
             pkg-config \
             librsvg2-bin \
@@ -93,8 +92,9 @@ jobs:
 
           # Patch main.mk to support modern JDK and environments
           MAIN_MK="$BUILD_DIR/core/main.mk"
+          CONFIG_MK="$BUILD_DIR/core/config.mk"
 
-          # Fix 1: Bypass the KATI/Soong check (some clones default to modern Soong)
+          # Fix 1: Bypass the KATI/Soong check
           sed -i '/^ifndef KATI/,/^endif/{s/.*/KATI := yes/;}' "$MAIN_MK" 2>/dev/null || true
 
           # Fix 2: Bypass Java version check — art_standalone works fine with
@@ -104,22 +104,21 @@ jobs:
             "$MAIN_MK" 2>/dev/null || true
           echo "EXPERIMENTAL_USE_JAVA8 := true" >> "$MAIN_MK"
 
+          # Fix 3: Bypass tools.jar check — JDK 11+ no longer ships tools.jar
+          # but art_standalone doesn't actually need it for its build targets.
+          sed -i \
+            '/could not find jdk tools.jar/s/^/#/' \
+            "$CONFIG_MK" 2>/dev/null || true
+
       - name: Configure
-        run: |
-          # art_standalone needs JDK 11 (has tools.jar for legacy AOSP build system)
-          # ATL itself can use either JDK 11 or 21
-          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
       - name: Build all
         run: cmake --build build -j$(nproc)
-        env:
-          JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
 
       - name: Build AppImage
         run: cmake --build build --target appimage
         env:
-          JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Verify AppImage
