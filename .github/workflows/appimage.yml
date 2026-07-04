@@ -70,6 +70,7 @@ jobs:
             liblzma-dev \
             meson \
             ninja-build \
+            openjdk-11-jdk-headless \
             openjdk-21-jdk-headless \
             pkg-config \
             librsvg2-bin \
@@ -104,14 +105,21 @@ jobs:
           echo "EXPERIMENTAL_USE_JAVA8 := true" >> "$MAIN_MK"
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        run: |
+          # art_standalone needs JDK 11 (has tools.jar for legacy AOSP build system)
+          # ATL itself can use either JDK 11 or 21
+          export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
       - name: Build all
         run: cmake --build build -j$(nproc)
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
 
       - name: Build AppImage
         run: cmake --build build --target appimage
         env:
+          JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
           GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Verify AppImage
