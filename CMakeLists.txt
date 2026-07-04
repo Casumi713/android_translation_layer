@@ -4,6 +4,34 @@ project(android_translation_layer_unified)
 # Build configuration
 set(BUILD_DIR "${CMAKE_BINARY_DIR}")
 set(INSTALL_PREFIX "${BUILD_DIR}/install")
+
+# Auto-detect JAVA_HOME (works on Debian/Ubuntu/Fedora)
+if(DEFINED ENV{JAVA_HOME} AND NOT "$ENV{JAVA_HOME}" STREQUAL "")
+    set(JAVA_HOME "$ENV{JAVA_HOME}")
+    message(STATUS "JAVA_HOME from environment: ${JAVA_HOME}")
+else()
+    # Find java and derive JAVA_HOME
+    find_program(JAVA_BIN java)
+    if(JAVA_BIN)
+        get_filename_component(JAVA_HOME_REAL "${JAVA_BIN}" REALPATH)
+        # Resolve: /usr/lib/jvm/java-21-openjdk-<arch>/bin/java → /usr/lib/jvm/java-21-openjdk-<arch>
+        get_filename_component(JAVA_HOME "${JAVA_HOME_REAL}" DIRECTORY)
+        get_filename_component(JAVA_HOME "${JAVA_HOME}" DIRECTORY)
+        message(STATUS "JAVA_HOME auto-detected: ${JAVA_HOME}")
+    else()
+        # Fallback: try common paths
+        foreach(_jvmdir /usr/lib/jvm/java-21-openjdk /usr/lib/jvm/java-21-openjdk-amd64 /usr/lib/jvm/java-21-openjdk-x86_64 /usr/lib/jvm/default-java)
+            if(EXISTS "${_jvmdir}/bin/javac")
+                set(JAVA_HOME "${_jvmdir}")
+                break()
+            endif()
+        endforeach()
+        if(NOT JAVA_HOME)
+            message(FATAL_ERROR "Java 21 JDK not found. Set JAVA_HOME or install openjdk-21-jdk.")
+        endif()
+        message(STATUS "JAVA_HOME fallback: ${JAVA_HOME}")
+    endif()
+endif()
 set(BIN_DIR "${BUILD_DIR}/bin")
 set(LIB_DIR "${BUILD_DIR}/lib")
 set(INCLUDE_DIR "${BUILD_DIR}/include")
@@ -86,6 +114,7 @@ add_custom_command(
         --includedir=${INCLUDE_DIR}
         --enable-shared
         --disable-static
+        --disable-tests
     COMMAND ${CMAKE_COMMAND} -E chdir ${LIBUNWIND_BUILD_DIR} make -j${NPROC}
     COMMAND ${CMAKE_COMMAND} -E chdir ${LIBUNWIND_BUILD_DIR} make install
     # Generate pkg-config file for libunwind
@@ -219,12 +248,12 @@ add_custom_command(
     OUTPUT ${ATL_BUILD_DIR}/.built
     COMMAND ${CMAKE_COMMAND} -E make_directory ${ATL_BUILD_DIR}
     COMMAND ${CMAKE_COMMAND} -E env
-        JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+        JAVA_HOME=${JAVA_HOME}
         PKG_CONFIG_PATH=${PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}
         LIBRARY_PATH=${LIB_DIR}:${LIB_DIR}/art:${BIONIC_BUILD_DIR}:$ENV{LIBRARY_PATH}
         LD_LIBRARY_PATH=${LIB_DIR}:${LIB_DIR}/art:$ENV{LD_LIBRARY_PATH}
         C_INCLUDE_PATH=${INCLUDE_DIR}:$ENV{C_INCLUDE_PATH}
-        PATH=${BIN_DIR}:/usr/lib/jvm/java-21-openjdk-amd64/bin:$ENV{PATH}
+        PATH=${BIN_DIR}:${JAVA_HOME}/bin:$ENV{PATH}
         meson setup ${ATL_BUILD_DIR} ${CMAKE_SOURCE_DIR}
             --prefix=${INSTALL_PREFIX}
             --libdir=lib
@@ -232,12 +261,12 @@ add_custom_command(
             --wipe
             -Dpkg_config_path=${PKGCONFIG_DIR}
     COMMAND ${CMAKE_COMMAND} -E env
-        JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+        JAVA_HOME=${JAVA_HOME}
         PKG_CONFIG_PATH=${PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}
         LIBRARY_PATH=${LIB_DIR}:${LIB_DIR}/art:${BIONIC_BUILD_DIR}:$ENV{LIBRARY_PATH}
         LD_LIBRARY_PATH=${LIB_DIR}:${LIB_DIR}/art:$ENV{LD_LIBRARY_PATH}
         C_INCLUDE_PATH=${INCLUDE_DIR}:$ENV{C_INCLUDE_PATH}
-        PATH=${BIN_DIR}:/usr/lib/jvm/java-21-openjdk-amd64/bin:$ENV{PATH}
+        PATH=${BIN_DIR}:${JAVA_HOME}/bin:$ENV{PATH}
         meson compile -C ${ATL_BUILD_DIR} -j${NPROC}
     COMMAND ${CMAKE_COMMAND} -E touch ${ATL_BUILD_DIR}/.built
     DEPENDS art_standalone
@@ -277,9 +306,39 @@ add_custom_target(clean_all
     COMMENT "Cleaning all build directories..."
 )
 
+# =============================================================================
+# AppImage target
+# =============================================================================
+if(NOT WIN32)
+    # Capture git version for the AppImage
+    set(ATL_VERSION "")
+    find_package(Git QUIET)
+    if(Git_FOUND)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE ATL_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+    endif()
+
+    add_custom_target(appimage
+        COMMAND ${CMAKE_COMMAND} -E env
+            ATL_BUILD_DIR="${CMAKE_BINARY_DIR}"
+            ATL_VERSION="${ATL_VERSION}"
+            bash "${CMAKE_SOURCE_DIR}/appimage/build-appimage.sh"
+        DEPENDS all_build
+        COMMENT "Building AppImage portable application..."
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        USAGE "cmake --build build --target appimage"
+    )
+endif()
+
 message(STATUS "")
 message(STATUS "=== Unified Build System Configuration ===")
 message(STATUS "To build everything: cmake --build build")
 message(STATUS "To install: cmake --build build --target install_all")
 message(STATUS "To clean: cmake --build build --target clean_all")
+message(STATUS "To build AppImage: cmake --build build --target appimage")
 message(STATUS "")

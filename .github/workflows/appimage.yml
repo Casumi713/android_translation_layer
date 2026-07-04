@@ -1,0 +1,130 @@
+# =============================================================================
+# Android Translation Layer — AppImage Build (GitHub Actions)
+# =============================================================================
+# Builds a portable AppImage on push/PR and publishes on tagged releases.
+#
+# Build environment: Ubuntu 24.04
+# Why container-based approach: art_standalone (Android Runtime) requires the
+# old AOSP Make-only build system (android-6.0.1_r46), which also needs a
+# Java version check bypass to work with modern JDKs.
+#
+# The AppImage bundles:
+#   - ATL main binary and self-built libraries (wolfssl, libunwind, bionic, ART)
+#   - Java resources (api-impl.jar, framework-res.apk, test_runner.jar)
+#   - Android tools (dx, dex2oat)
+# System dependencies (GTK4, Wayland, Vulkan, WebKitGTK6, etc.) are expected
+# from the host and are NOT bundled.
+# =============================================================================
+
+name: Build AppImage
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            autoconf \
+            build-essential \
+            cmake \
+            libavcodec-dev \
+            libasound2-dev \
+            libbsd-dev \
+            libcap-dev \
+            libdrm-dev \
+            libelf-dev \
+            libfontconfig-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libgudev-1.0-dev \
+            libopenxr-dev \
+            libportal-dev \
+            libsqlite3-dev \
+            libswscale-dev \
+            libtool \
+            libunwind-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libwebkitgtk-6.0-dev \
+            meson \
+            ninja-build \
+            openjdk-21-jdk-headless \
+            pkg-config \
+            rsvg-convert \
+            wget
+
+      - name: Set up AOSP build system for art_standalone
+        run: |
+          set -euo pipefail
+          ART_DIR="${{ github.workspace }}/thirdparty/art_standalone"
+          BUILD_DIR="$ART_DIR/build"
+
+          if [ ! -d "$BUILD_DIR/core" ]; then
+            rm -rf "$BUILD_DIR"
+            git clone --depth 1 \
+              https://github.com/aosp-mirror/platform_build.git \
+              "$BUILD_DIR"
+          fi
+
+          # Patch main.mk to skip Java version check — art_standalone
+          # works fine with modern JDK (the old check only accepts 1.7/1.8)
+          MAIN_MK="$BUILD_DIR/core/main.mk"
+          # Remove the Java version check block (lines between "Check for correct java" and the next include)
+          sed -i \
+            '/^java_version_str/,/^include.*versions_check.mk/d' \
+            "$MAIN_MK" 2>/dev/null || true
+          # Also set EXPERIMENTAL_USE_JAVA8 to use the less-strict code path
+          echo "EXPERIMENTAL_USE_JAVA8 := true" >> "$MAIN_MK"
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+      - name: Build all
+        run: cmake --build build -j$(nproc)
+
+      - name: Build AppImage
+        run: cmake --build build --target appimage
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Verify AppImage
+        run: |
+          if [ -f appimage/verify-appimage.sh ]; then
+            bash appimage/verify-appimage.sh build/android-translation-layer-*.AppImage || true
+          fi
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-translation-layer-appimage-${{ github.sha }}
+          path: build/android-translation-layer-*.AppImage
+          compression-level: 0
+
+      - name: Upload to Release (tagged only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/android-translation-layer-*.AppImage
+            build/android-translation-layer-*.zsync
+          generate_release_notes: true
